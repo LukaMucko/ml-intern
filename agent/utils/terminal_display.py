@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.theme import Theme
 
 _THEME = Theme({
-    "tool.name": "bold cyan",
+    "tool.name": "bold rgb(255,200,80)",
     "tool.args": "dim",
     "tool.ok": "dim green",
     "tool.fail": "dim red",
@@ -28,31 +28,75 @@ def get_console() -> Console:
 
 # ── Banner ─────────────────────────────────────────────────────────────
 
-def print_banner() -> None:
-    Y = "\033[38;2;255;200;50m"  # HF yellow
-    D = "\033[38;2;180;140;40m"  # dimmer gold for accents
-    R = "\033[0m"
-    art = f"""
-{_I}{Y} _  _                _             ___                _                _   {R}
-{_I}{Y}| || |_  _ __ _ __ _(_)_ _  __ _  | __|_ _ __ ___    /_\\  __ _ ___ _ _| |_ {R}
-{_I}{Y}| __ | || / _` / _` | | ' \\/ _` | | _/ _` / _/ -_)  / _ \\/ _` / -_) ' \\  _|{R}
-{_I}{Y}|_||_|\\_,_\\__, \\__, |_|_||_\\__, | |_|\\__,_\\__\\___| /_/ \\_\\__, \\___|_||_\\__|{R}
-{_I}{D}          |___/|___/       |___/                         |___/             {R}
-"""
-    _console.print(art, highlight=False)
-    _console.print(f"{_I}[dim]🤗 /help for commands · /quit to exit[/dim]\n")
+def print_banner(model: str | None = None, hf_user: str | None = None) -> None:
+    """Print particle logo then CRT boot sequence with system info."""
+    from agent.utils.particle_logo import run_particle_logo
+    from agent.utils.crt_boot import run_boot_sequence
+
+    # Particle coalesce logo — 1.5s converge, 2s hold
+    run_particle_logo(_console, hold_seconds=2.0)
+
+    # Clear screen for CRT boot — starts from top
+    _console.file.write("\033[2J\033[H")
+    _console.file.flush()
+
+    model_label = model or "anthropic/claude-opus-4-6"
+    user_label = hf_user or "not logged in"
+
+    # Warm gold palette matching the shimmer highlight (255, 200, 80)
+    gold = "rgb(255,200,80)"
+    dim_gold = "rgb(180,140,40)"
+
+    boot_lines = [
+        (f"{_I}Initializing agent runtime...", gold),
+        (f"{_I}  User: {user_label}", dim_gold),
+        (f"{_I}  Model: {model_label}", dim_gold),
+        (f"{_I}  Tools: loading...", dim_gold),
+        ("", ""),
+        (f"{_I}/help for commands · /model to switch · /quit to exit", gold),
+    ]
+
+    run_boot_sequence(_console, boot_lines)
 
 
 # ── Init progress ──────────────────────────────────────────────────────
 
-def print_init_done() -> None:
-    _console.print(f"{_I}[dim]Ready.[/dim]\n")
+def print_init_done(tool_count: int = 0) -> None:
+    import time
+    f = _console.file
+    # Overwrite the "Tools: loading..." line with actual count
+    f.write(f"\033[A\033[A\033[A\033[K")  # Move up 3 lines (blank + help + blank) then up to tools line
+    f.write(f"\033[A\033[K")
+    gold = "\033[38;2;180;140;40m"
+    reset = "\033[0m"
+    tool_text = f"{_I}  Tools: {tool_count} loaded"
+    for ch in tool_text:
+        f.write(f"{gold}{ch}{reset}")
+        f.flush()
+        time.sleep(0.012)
+    f.write("\n\n")
+    # Reprint the help line
+    f.write(f"{_I}\033[38;2;255;200;80m/help for commands · /model to switch · /quit to exit{reset}\n\n")
+    # Ready message — minimal padding
+    f.write(f"{_I}\033[38;2;255;200;80mReady. Let's build something impressive.{reset}\n")
+    f.flush()
 
 
 # ── Tool calls ─────────────────────────────────────────────────────────
 
 def print_tool_call(tool_name: str, args_preview: str) -> None:
-    _console.print(f"{_I}[tool.name]▸ {tool_name}[/tool.name]  [tool.args]{args_preview}[/tool.args]")
+    import time
+    f = _console.file
+    # CRT-style: type out tool name in HF yellow
+    gold = "\033[38;2;255;200;80m"
+    reset = "\033[0m"
+    f.write(f"{_I}{gold}▸ ")
+    for ch in tool_name:
+        f.write(ch)
+        f.flush()
+        time.sleep(0.015)
+    f.write(f"{reset}  \033[2m{args_preview}{reset}\n")
+    f.flush()
 
 
 def print_tool_output(output: str, success: bool, truncate: bool = True) -> None:
@@ -146,7 +190,7 @@ class SubAgentDisplay:
         lines = []
         # Header: ▸ research (stats)
         stats = self._format_stats()
-        header = f"{_I}\033[1;36m▸ research\033[0m"
+        header = f"{_I}\033[38;2;255;200;80m▸ research\033[0m"
         if stats:
             header += f"  \033[2m({stats})\033[0m"
         lines.append(header)
@@ -183,9 +227,37 @@ def print_tool_log(tool: str, log: str) -> None:
 # ── Messages ───────────────────────────────────────────────────────────
 
 def print_markdown(text: str) -> None:
+    import io, time, random
     from rich.padding import Padding
+
     _console.print()
-    _console.print(Padding(Markdown(text), (0, 0, 0, 2)))
+
+    # Render markdown to a string buffer so we can type it out
+    buf = io.StringIO()
+    buf_console = Console(file=buf, width=_console.width, highlight=False, theme=_THEME)
+    buf_console.print(Padding(Markdown(text), (0, 0, 0, 2)))
+    rendered = buf.getvalue()
+
+    # Strip trailing whitespace from each line so we don't type across the full width
+    lines = rendered.split("\n")
+    rendered = "\n".join(line.rstrip() for line in lines)
+
+    # CRT typewriter effect — fast, with occasional glitch
+    rng = random.Random(42)
+    f = _console.file
+    for ch in rendered:
+        f.write(ch)
+        f.flush()
+        if ch == "\n":
+            time.sleep(0.002)
+        elif ch == " ":
+            time.sleep(0.002)
+        elif rng.random() < 0.03:
+            time.sleep(0.015)
+        else:
+            time.sleep(0.004)
+    f.write("\n")
+    f.flush()
 
 
 def print_error(message: str) -> None:

@@ -251,7 +251,8 @@ async def event_listener(
             event = await event_queue.get()
 
             if event.event_type == "ready":
-                print_init_done()
+                tool_count = event.data.get("tool_count", 0) if event.data else 0
+                print_init_done(tool_count=tool_count)
                 ready_event.set()
             elif event.event_type == "assistant_message":
                 shimmer.stop()
@@ -711,8 +712,6 @@ async def main():
     # Clear screen
     os.system("clear" if os.name != "nt" else "cls")
 
-    print_banner()
-
     # Create prompt session for input (needed early for token prompt)
     prompt_session = PromptSession()
 
@@ -720,6 +719,16 @@ async def main():
     hf_token = _get_hf_token()
     if not hf_token:
         hf_token = await _prompt_and_save_hf_token(prompt_session)
+
+    # Resolve username for banner
+    hf_user = None
+    try:
+        from huggingface_hub import HfApi
+        hf_user = HfApi(token=hf_token).whoami().get("name")
+    except Exception:
+        pass
+
+    print_banner(hf_user=hf_user)
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
