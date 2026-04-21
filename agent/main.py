@@ -11,9 +11,12 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -47,15 +50,49 @@ from agent.utils.terminal_display import (
 
 litellm.drop_params = True
 
-# ── Suggested models (mirrors backend/routes/agent.py) ──────────────────
-AVAILABLE_MODELS = [
-    {"id": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6"},
-    {"id": "huggingface/fireworks-ai/MiniMaxAI/MiniMax-M2.5", "label": "MiniMax M2.5"},
-    {"id": "huggingface/novita/moonshotai/kimi-k2.5", "label": "Kimi K2.5"},
-    {"id": "huggingface/novita/zai-org/glm-5", "label": "GLM 5"},
-]
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _models_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}/models"
+
+
+def _configured_model_options(config) -> tuple[list[dict[str, str]], str | None]:
+    """Return models exposed by the configured OpenAI-compatible base_url."""
+    if not config.base_url:
+        return ([{"id": config.model_name, "provider": "configured"}], None)
+
+    headers = {}
+    if config.api_key:
+        headers["Authorization"] = f"Bearer {config.api_key}"
+
+    request = urllib.request.Request(_models_url(config.base_url), headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=10.0) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        return ([{"id": config.model_name, "provider": "configured"}], str(exc)[:500])
+
+    raw_models = data.get("data", []) if isinstance(data, dict) else []
+    models: list[dict[str, str]] = []
+    for item in raw_models:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            continue
+        owned_by = item.get("owned_by")
+        models.append(
+            {
+                "id": model_id,
+                "provider": owned_by if isinstance(owned_by, str) else "configured router",
+            }
+        )
+
+    if not any(model["id"] == config.model_name for model in models):
+        models.append({"id": config.model_name, "provider": "configured"})
+
+    return models, None
 
 
 def _safe_get_args(arguments: dict) -> dict:
@@ -671,14 +708,16 @@ def _handle_slash_command(
 
     if command == "/model":
         if not arg:
-            print("Suggested models:")
-            session = session_holder[0] if session_holder else None
+            print("Configured models:")
             current = config.model_name if config else ""
-            for m in AVAILABLE_MODELS:
-                marker = " <-- current" if m["id"] == current else ""
-                print(f"  {m['id']}  ({m['label']}){marker}")
-            if current and not any(m["id"] == current for m in AVAILABLE_MODELS):
-                print(f"  {current}  (configured)<-- current")
+            models, error = _configured_model_options(config)
+            if error:
+                print(f"  Could not fetch configured /models: {error}")
+            for model in models:
+                marker = " <-- current" if model["id"] == current else ""
+                provider = model.get("provider")
+                suffix = f"  ({provider})" if provider else ""
+                print(f"  {model['id']}{suffix}{marker}")
             return None
         session = session_holder[0] if session_holder else None
         if session:
@@ -721,6 +760,9 @@ async def main():
     if not hf_token:
         print("[dim]No HF token found — HF tools (jobs, repos, datasets) will be unavailable.[/dim]")
 
+    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
+    config = load_config(config_path)
+
     # Resolve username for banner
     hf_user = None
     if hf_token:
@@ -730,7 +772,7 @@ async def main():
         except Exception:
             pass
 
-    print_banner(hf_user=hf_user)
+    print_banner(model=config.model_name, hf_user=hf_user)
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
@@ -740,10 +782,6 @@ async def main():
     turn_complete_event = asyncio.Event()
     turn_complete_event.set()
     ready_event = asyncio.Event()
-
-    # Start agent loop in background
-    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
-    config = load_config(config_path)
 
     # Create tool router with local mode
     tool_router = ToolRouter(
@@ -1040,12 +1078,38 @@ async def headless_main(
 def _terminate_process(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
-    process.terminate()
+
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.terminate()
+
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        process.kill()
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError:
+            process.kill()
         process.wait(timeout=5)
+
+
+def _ensure_port_available(host: str, port: int, label: str) -> None:
+    bind_host = "" if host in {"0.0.0.0", "::"} else host
+    family = socket.AF_INET6 if host == "::" else socket.AF_INET
+
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((bind_host, port))
+        except OSError as exc:
+            raise SystemExit(
+                f"{label} port {port} is already in use. "
+                "Stop the existing process or choose another port."
+            ) from exc
 
 
 def run_web(host: str = "0.0.0.0", backend_port: int = 7860, frontend_port: int = 5173) -> None:
@@ -1060,6 +1124,9 @@ def run_web(host: str = "0.0.0.0", backend_port: int = 7860, frontend_port: int 
         raise SystemExit(
             "frontend/node_modules is missing. Run `cd frontend && npm install` first."
         )
+
+    _ensure_port_available(host, backend_port, "Backend")
+    _ensure_port_available(host, frontend_port, "Frontend")
 
     backend_cmd = [
         "uv",
@@ -1080,6 +1147,7 @@ def run_web(host: str = "0.0.0.0", backend_port: int = 7860, frontend_port: int 
         host,
         "--port",
         str(frontend_port),
+        "--strictPort",
     ]
 
     processes: list[subprocess.Popen] = []
@@ -1092,8 +1160,8 @@ def run_web(host: str = "0.0.0.0", backend_port: int = 7860, frontend_port: int 
     signal.signal(signal.SIGTERM, stop_all)
 
     try:
-        processes.append(subprocess.Popen(backend_cmd, cwd=backend_dir))
-        processes.append(subprocess.Popen(frontend_cmd, cwd=frontend_dir))
+        processes.append(subprocess.Popen(backend_cmd, cwd=backend_dir, start_new_session=True))
+        processes.append(subprocess.Popen(frontend_cmd, cwd=frontend_dir, start_new_session=True))
 
         print(f"Backend:  http://localhost:{backend_port}")
         print(f"Frontend: http://localhost:{frontend_port}")

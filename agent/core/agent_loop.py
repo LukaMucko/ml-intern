@@ -102,13 +102,20 @@ def _needs_approval(
     tool_name: str, tool_args: dict, config: Config | None = None
 ) -> bool:
     """Check if a tool call requires user approval before execution."""
-    # Yolo mode: skip all approvals
-    if config and config.yolo_mode:
-        return False
-
-    # If args are malformed, skip approval (validation error will be shown later)
+    # If args are malformed, skip approval (validation error will be shown later).
     args_valid, _ = _validate_tool_args(tool_args)
     if not args_valid:
+        return False
+
+    # Destructive local shell commands always require explicit user permission.
+    if tool_name == "bash":
+        command = tool_args.get("command", "")
+        if isinstance(command, str) and _is_destructive_shell_command(command):
+            return True
+
+    # Yolo mode skips remaining approvals but still preserves the destructive
+    # local shell guard above.
+    if config and config.yolo_mode:
         return False
 
     if tool_name == "sandbox_create":
@@ -166,6 +173,54 @@ def _needs_approval(
             return True
 
     return False
+
+
+def _is_destructive_shell_command(command: str) -> bool:
+    """Return True for shell commands that should require user approval."""
+    import shlex
+
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return True
+
+    if not tokens:
+        return False
+
+    separators = {"&&", "||", ";", "|", "(", ")", "time", "nohup", "sudo", "env"}
+    commands = [
+        token
+        for token in tokens
+        if token not in separators and not token.startswith("-") and "=" not in token
+    ]
+    first_words = {cmd.rsplit("/", 1)[-1] for cmd in commands}
+
+    destructive = {
+        "rm",
+        "rmdir",
+        "unlink",
+        "shred",
+        "truncate",
+        "dd",
+        "mkfs",
+        "chmod",
+        "chown",
+        "chgrp",
+    }
+    if first_words & destructive:
+        return True
+
+    normalized = " ".join(tokens)
+    git_destructive_patterns = [
+        "git clean",
+        "git reset --hard",
+        "git checkout --",
+        "git restore",
+        "git branch -D",
+        "git push --force",
+        "git push -f",
+    ]
+    return any(pattern in normalized for pattern in git_destructive_patterns)
 
 
 # -- LLM retry constants --------------------------------------------------

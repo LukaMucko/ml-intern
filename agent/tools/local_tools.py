@@ -246,6 +246,8 @@ _LOCAL_TOOL_SPECS = {
             "- To write files: use write (not echo/cat <<EOF)\n"
             "\n"
             "Commands run in a shell at the working directory. Each invocation is independent.\n"
+            "Destructive commands such as rm, rmdir, truncate, git clean, "
+            "and git reset --hard require explicit user approval before execution.\n"
             "Chain dependent commands with &&. Independent commands should be "
             "separate bash calls (they can run in parallel).\n"
             "\n"
