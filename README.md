@@ -40,6 +40,15 @@ If no `HF_TOKEN` is set, the CLI will prompt you to paste one on first launch. T
 ml-intern
 ```
 
+**Web app** (backend + Vite dev server):
+
+```bash
+ml-intern web
+```
+
+Then open `http://localhost:5173`. Use `--backend-port`, `--frontend-port`, or
+`--host` if the defaults are already in use.
+
 **Headless mode** (single prompt, auto-approve):
 
 ```bash

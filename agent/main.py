@@ -10,6 +10,8 @@ import argparse
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -52,6 +54,8 @@ AVAILABLE_MODELS = [
     {"id": "huggingface/novita/moonshotai/kimi-k2.5", "label": "Kimi K2.5"},
     {"id": "huggingface/novita/zai-org/glm-5", "label": "GLM 5"},
 ]
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _safe_get_args(arguments: dict) -> dict:
@@ -1033,6 +1037,82 @@ async def headless_main(
         await tool_router.__aexit__(None, None, None)
 
 
+def _terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def run_web(host: str = "0.0.0.0", backend_port: int = 7860, frontend_port: int = 5173) -> None:
+    """Launch backend and Vite dev server for the web UI."""
+    backend_dir = PROJECT_ROOT / "backend"
+    frontend_dir = PROJECT_ROOT / "frontend"
+
+    if not frontend_dir.exists() or not backend_dir.exists():
+        raise SystemExit(f"Could not find frontend/backend directories under {PROJECT_ROOT}")
+
+    if not (frontend_dir / "node_modules").exists():
+        raise SystemExit(
+            "frontend/node_modules is missing. Run `cd frontend && npm install` first."
+        )
+
+    backend_cmd = [
+        "uv",
+        "run",
+        "uvicorn",
+        "main:app",
+        "--host",
+        host,
+        "--port",
+        str(backend_port),
+    ]
+    frontend_cmd = [
+        "npm",
+        "run",
+        "dev",
+        "--",
+        "--host",
+        host,
+        "--port",
+        str(frontend_port),
+    ]
+
+    processes: list[subprocess.Popen] = []
+
+    def stop_all(*_args) -> None:
+        for process in reversed(processes):
+            _terminate_process(process)
+
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, stop_all)
+
+    try:
+        processes.append(subprocess.Popen(backend_cmd, cwd=backend_dir))
+        processes.append(subprocess.Popen(frontend_cmd, cwd=frontend_dir))
+
+        print(f"Backend:  http://localhost:{backend_port}")
+        print(f"Frontend: http://localhost:{frontend_port}")
+        print("Press Ctrl-C to stop both servers.")
+
+        while True:
+            for process in processes:
+                code = process.poll()
+                if code is not None:
+                    stop_all()
+                    raise SystemExit(code)
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nStopping web servers...")
+        stop_all()
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+
+
 def cli():
     """Entry point for the ml-intern CLI command."""
     import logging as _logging
@@ -1045,20 +1125,32 @@ def cli():
     warnings.filterwarnings("ignore", category=SyntaxWarning, module="whoosh")
 
     parser = argparse.ArgumentParser(description="Hugging Face Agent CLI")
-    parser.add_argument("prompt", nargs="?", default=None, help="Run headlessly with this prompt")
+    parser.add_argument(
+        "args",
+        nargs="*",
+        help='Run headlessly with this prompt, or use "web" to launch the web app',
+    )
     parser.add_argument("--model", "-m", default=None, help=f"Model to use (default: from config)")
     parser.add_argument("--max-iterations", type=int, default=None,
                         help="Max LLM requests per turn (default: 50, use -1 for unlimited)")
     parser.add_argument("--no-stream", action="store_true",
                         help="Disable token streaming (use non-streaming LLM calls)")
+    parser.add_argument("--host", default="0.0.0.0", help="Host for `ml-intern web` (default: 0.0.0.0)")
+    parser.add_argument("--backend-port", type=int, default=7860,
+                        help="Backend port for `ml-intern web` (default: 7860)")
+    parser.add_argument("--frontend-port", type=int, default=5173,
+                        help="Frontend port for `ml-intern web` (default: 5173)")
     args = parser.parse_args()
 
     try:
-        if args.prompt:
+        if args.args and args.args[0] == "web":
+            run_web(host=args.host, backend_port=args.backend_port, frontend_port=args.frontend_port)
+        elif args.args:
             max_iter = args.max_iterations
             if max_iter is not None and max_iter < 0:
                 max_iter = 10_000  # effectively unlimited
-            asyncio.run(headless_main(args.prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
+            prompt = " ".join(args.args)
+            asyncio.run(headless_main(prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
         else:
             asyncio.run(main())
     except KeyboardInterrupt:
