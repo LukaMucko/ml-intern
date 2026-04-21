@@ -22,6 +22,8 @@ class Config(BaseModel):
     """Configuration manager"""
 
     model_name: str
+    base_url: str | None = None  # Custom OpenAI-compatible endpoint (e.g. http://localhost:8000/v1)
+    api_key: str | None = None   # Optional API key for the custom endpoint
     mcpServers: dict[str, MCPServerConfig] = {}
     save_sessions: bool = True
     session_dataset_repo: str = "akseljoonas/hf-agent-sessions"
@@ -32,6 +34,7 @@ class Config(BaseModel):
     # Permission control parameters
     confirm_cpu_jobs: bool = True
     auto_file_upload: bool = False
+    enable_hf_compute: bool = False
 
 
 def substitute_env_vars(obj: Any) -> Any:

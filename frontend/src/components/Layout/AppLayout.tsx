@@ -25,6 +25,7 @@ import SessionChat from '@/components/SessionChat';
 import CodePanel from '@/components/CodePanel/CodePanel';
 import WelcomeScreen from '@/components/WelcomeScreen/WelcomeScreen';
 import { apiFetch } from '@/utils/api';
+import { appPath } from '@/utils/paths';
 
 const DRAWER_WIDTH = 260;
 
@@ -231,7 +232,7 @@ export default function AppLayout() {
           <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0.75 }}>
             <Box
               component="img"
-              src="/smolagents.webp"
+              src={appPath('/smolagents.webp')}
               alt="smolagents"
               sx={{ width: { xs: 20, md: 22 }, height: { xs: 20, md: 22 } }}
             />

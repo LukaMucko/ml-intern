@@ -5,7 +5,7 @@
  * In development: auth is bypassed on the backend.
  */
 
-import { triggerLogin } from '@/hooks/useAuth';
+import { appPath } from '@/utils/paths';
 
 /** Wrapper around fetch with credentials and common headers. */
 export async function apiFetch(
@@ -17,7 +17,7 @@ export async function apiFetch(
     ...(options.headers as Record<string, string>),
   };
 
-  const response = await fetch(path, {
+  const response = await fetch(appPath(path), {
     ...options,
     headers,
     credentials: 'include', // Send cookies with every request
@@ -26,10 +26,10 @@ export async function apiFetch(
   // Handle 401 — redirect to login
   if (response.status === 401) {
     try {
-      const authStatus = await fetch('/auth/status', { credentials: 'include' });
+      const authStatus = await fetch(appPath('/auth/status'), { credentials: 'include' });
       const data = await authStatus.json();
       if (data.auth_enabled) {
-        triggerLogin();
+        window.location.href = appPath('/auth/login');
         throw new Error('Authentication required — redirecting to login.');
       }
     } catch (e) {

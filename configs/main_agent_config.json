@@ -1,10 +1,13 @@
 {
-  "model_name": "anthropic/claude-opus-4-6",
+  "model_name": "claude-opus-4-7",
+  "base_url": "${ANTHROPIC_BASE_URL}",
+  "api_key": "${ANTHROPIC_API_KEY}",
   "save_sessions": true,
   "session_dataset_repo": "akseljoonas/hf-agent-sessions",
   "yolo_mode": false,
   "confirm_cpu_jobs": true,
   "auto_file_upload": true,
+  "enable_hf_compute": false,
   "mcpServers": {
     "hf-mcp-server": {
       "transport": "http",

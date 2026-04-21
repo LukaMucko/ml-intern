@@ -128,14 +128,16 @@ class ContextManager:
             import os
             cwd = os.getcwd()
             local_context = (
-                f"\n\n# CLI / Local mode\n\n"
-                f"You are running as a local CLI tool on the user's machine. "
-                f"There is NO sandbox — bash, read, write, and edit operate directly "
-                f"on the local filesystem.\n\n"
+                f"\n\n# Local execution mode\n\n"
+                f"You are running on the user's machine. There is NO sandbox — "
+                f"bash, read, write, and edit operate directly on the local filesystem.\n\n"
                 f"Working directory: {cwd}\n"
                 f"Use absolute paths or paths relative to the working directory. "
                 f"Do NOT use /app/ paths — that is a sandbox convention that does not apply here.\n"
-                f"The sandbox_create tool is NOT available. Run code directly with bash."
+                f"The sandbox_create and hf_jobs tools are NOT available. "
+                f"Do not propose or attempt Hugging Face Jobs, Spaces, or remote compute. "
+                f"Run code directly with bash for quick local checks, and ask before "
+                f"starting anything expensive or long-running."
             )
             static_prompt += local_context
 
@@ -263,7 +265,10 @@ class ContextManager:
         return False
 
     async def compact(
-        self, model_name: str, tool_specs: list[dict] | None = None
+        self,
+        model_name: str,
+        tool_specs: list[dict] | None = None,
+        llm_params: dict | None = None,
     ) -> None:
         """Remove old messages to keep history under target size"""
         if (self.context_length <= self.max_context) or not self.items:
@@ -304,14 +309,14 @@ class ContextManager:
         )
 
         hf_key = os.environ.get("INFERENCE_TOKEN")
+        completion_params = llm_params or {"model": model_name}
+        if not llm_params and hf_key and model_name.startswith("huggingface/"):
+            completion_params["api_key"] = hf_key
         response = await acompletion(
-            model=model_name,
             messages=messages_to_summarize,
             max_completion_tokens=self.compact_size,
             tools=tool_specs,
-            api_key=hf_key
-            if hf_key and model_name.startswith("huggingface/")
-            else None,
+            **completion_params,
         )
         summarized_message = Message(
             role="assistant", content=response.choices[0].message.content

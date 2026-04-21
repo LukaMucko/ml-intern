@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, KeyboardEvent } from 'react';
-import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Chip } from '@mui/material';
+import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import StopIcon from '@mui/icons-material/Stop';
@@ -11,50 +11,28 @@ interface ModelOption {
   name: string;
   description: string;
   modelPath: string;
-  avatarUrl: string;
-  recommended?: boolean;
 }
 
-const getHfAvatarUrl = (modelId: string) => {
-  const org = modelId.split('/')[0];
-  return `https://huggingface.co/api/avatars/${org}`;
+interface ServerModelOption {
+  id: string;
+  label?: string;
+  provider?: string;
+}
+
+const toModelOption = (model: ServerModelOption): ModelOption => {
+  return {
+    id: model.id,
+    name: model.label || model.id,
+    description: model.provider || 'Configured router',
+    modelPath: model.id,
+  };
 };
 
-const MODEL_OPTIONS: ModelOption[] = [
-  {
-    id: 'claude-opus',
-    name: 'Claude Opus 4.6',
-    description: 'Anthropic',
-    modelPath: 'anthropic/claude-opus-4-6',
-    avatarUrl: 'https://huggingface.co/api/avatars/Anthropic',
-    recommended: true,
-  },
-  {
-    id: 'minimax-m2.5',
-    name: 'MiniMax M2.5',
-    description: 'Via Fireworks',
-    modelPath: 'huggingface/fireworks-ai/MiniMaxAI/MiniMax-M2.5',
-    avatarUrl: getHfAvatarUrl('MiniMaxAI/MiniMax-M2.5'),
-    recommended: true,
-  },
-  {
-    id: 'kimi-k2.5',
-    name: 'Kimi K2.5',
-    description: 'Via Novita',
-    modelPath: 'huggingface/novita/moonshotai/kimi-k2.5',
-    avatarUrl: getHfAvatarUrl('moonshotai/Kimi-K2.5'),
-  },
-  {
-    id: 'glm-5',
-    name: 'GLM 5',
-    description: 'Via Novita',
-    modelPath: 'huggingface/novita/zai-org/glm-5',
-    avatarUrl: getHfAvatarUrl('zai-org/GLM-5'),
-  },
-];
+const createCustomModelOption = (modelPath: string): ModelOption =>
+  toModelOption({ id: modelPath || 'configured-model', label: modelPath || 'Configured model' });
 
-const findModelByPath = (path: string): ModelOption | undefined => {
-  return MODEL_OPTIONS.find(m => m.modelPath === path || path?.includes(m.id));
+const findModelByPath = (options: ModelOption[], path: string): ModelOption | undefined => {
+  return options.find(m => m.modelPath === path);
 };
 
 interface ChatInputProps {
@@ -68,32 +46,37 @@ interface ChatInputProps {
 export default function ChatInput({ onSend, onStop, isProcessing = false, disabled = false, placeholder = 'Ask anything...' }: ChatInputProps) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string>(() => {
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [selectedModelPath, setSelectedModelPath] = useState<string>(() => {
     try {
       const stored = localStorage.getItem('hf-agent-model');
-      if (stored && MODEL_OPTIONS.some(m => m.id === stored)) return stored;
+      if (stored) return stored;
     } catch { /* localStorage unavailable */ }
-    return MODEL_OPTIONS[0].id;
+    return '';
   });
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
 
   // Sync with backend on mount (backend is source of truth, localStorage is just a cache)
   useEffect(() => {
-    fetch('/api/config/model')
+    apiFetch('/api/config/model')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
+        const nextOptions = Array.isArray(data?.available)
+          ? data.available.map(toModelOption)
+          : [];
+        if (data?.current && !findModelByPath(nextOptions, data.current)) {
+          nextOptions.unshift(createCustomModelOption(data.current));
+        }
+        setModelOptions(nextOptions);
         if (data?.current) {
-          const model = findModelByPath(data.current);
-          if (model) {
-            setSelectedModelId(model.id);
-            try { localStorage.setItem('hf-agent-model', model.id); } catch { /* ignore */ }
-          }
+          setSelectedModelPath(data.current);
+          try { localStorage.setItem('hf-agent-model', data.current); } catch { /* ignore */ }
         }
       })
       .catch(() => { /* ignore */ });
   }, []);
 
-  const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId) || MODEL_OPTIONS[0];
+  const selectedModel = findModelByPath(modelOptions, selectedModelPath) || createCustomModelOption(selectedModelPath);
 
   // Auto-focus the textarea when the session becomes ready
   useEffect(() => {
@@ -135,8 +118,8 @@ export default function ChatInput({ onSend, onStop, isProcessing = false, disabl
         body: JSON.stringify({ model: model.modelPath }),
       });
       if (res.ok) {
-        setSelectedModelId(model.id);
-        try { localStorage.setItem('hf-agent-model', model.id); } catch { /* ignore */ }
+        setSelectedModelPath(model.modelPath);
+        try { localStorage.setItem('hf-agent-model', model.modelPath); } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
   };
@@ -268,11 +251,22 @@ export default function ChatInput({ onSend, onStop, isProcessing = false, disabl
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
             powered by
           </Typography>
-          <img
-            src={selectedModel.avatarUrl}
-            alt={selectedModel.name}
-            style={{ height: '14px', width: '14px', objectFit: 'contain', borderRadius: '2px' }}
-          />
+          <Box
+            sx={{
+              height: 14,
+              width: 14,
+              borderRadius: '3px',
+              bgcolor: 'var(--accent-yellow)',
+              color: '#000',
+              fontSize: '9px',
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {selectedModel.name.charAt(0).toUpperCase()}
+          </Box>
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
             {selectedModel.name}
           </Typography>
@@ -303,11 +297,11 @@ export default function ChatInput({ onSend, onStop, isProcessing = false, disabl
             }
           }}
         >
-          {MODEL_OPTIONS.map((model) => (
+          {modelOptions.map((model) => (
             <MenuItem
               key={model.id}
               onClick={() => handleSelectModel(model)}
-              selected={selectedModelId === model.id}
+              selected={selectedModelPath === model.modelPath}
               sx={{
                 py: 1.5,
                 '&.Mui-selected': {
@@ -316,30 +310,27 @@ export default function ChatInput({ onSend, onStop, isProcessing = false, disabl
               }}
             >
               <ListItemIcon>
-                <img
-                  src={model.avatarUrl}
-                  alt={model.name}
-                  style={{ width: 24, height: 24, borderRadius: '4px', objectFit: 'cover' }}
-                />
+                <Box
+                  aria-hidden
+                  sx={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '4px',
+                    bgcolor: 'var(--accent-yellow)',
+                    color: '#000',
+                    fontSize: '12px',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {model.name.charAt(0).toUpperCase()}
+                </Box>
               </ListItemIcon>
               <ListItemText
                 primary={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    {model.name}
-                    {model.recommended && (
-                      <Chip
-                        label="Recommended"
-                        size="small"
-                        sx={{
-                          height: '18px',
-                          fontSize: '10px',
-                          bgcolor: 'var(--accent-yellow)',
-                          color: '#000',
-                          fontWeight: 600,
-                        }}
-                      />
-                    )}
-                  </Box>
+                  model.name
                 }
                 secondary={model.description}
                 secondaryTypographyProps={{

@@ -45,14 +45,13 @@ from agent.utils.terminal_display import (
 
 litellm.drop_params = True
 
-# ── Available models (mirrors backend/routes/agent.py) ──────────────────
+# ── Suggested models (mirrors backend/routes/agent.py) ──────────────────
 AVAILABLE_MODELS = [
     {"id": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6"},
     {"id": "huggingface/fireworks-ai/MiniMaxAI/MiniMax-M2.5", "label": "MiniMax M2.5"},
     {"id": "huggingface/novita/moonshotai/kimi-k2.5", "label": "Kimi K2.5"},
     {"id": "huggingface/novita/zai-org/glm-5", "label": "GLM 5"},
 ]
-VALID_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
 
 
 def _safe_get_args(arguments: dict) -> dict:
@@ -668,16 +667,14 @@ def _handle_slash_command(
 
     if command == "/model":
         if not arg:
-            print("Available models:")
+            print("Suggested models:")
             session = session_holder[0] if session_holder else None
             current = config.model_name if config else ""
             for m in AVAILABLE_MODELS:
                 marker = " <-- current" if m["id"] == current else ""
                 print(f"  {m['id']}  ({m['label']}){marker}")
-            return None
-        if arg not in VALID_MODEL_IDS:
-            print(f"Unknown model: {arg}")
-            print(f"Valid: {', '.join(VALID_MODEL_IDS)}")
+            if current and not any(m["id"] == current for m in AVAILABLE_MODELS):
+                print(f"  {current}  (configured)<-- current")
             return None
         session = session_holder[0] if session_holder else None
         if session:
@@ -715,18 +712,19 @@ async def main():
     # Create prompt session for input (needed early for token prompt)
     prompt_session = PromptSession()
 
-    # HF token — required, prompt if missing
+    # HF token — optional (only needed for HF-specific tools)
     hf_token = _get_hf_token()
     if not hf_token:
-        hf_token = await _prompt_and_save_hf_token(prompt_session)
+        print("[dim]No HF token found — HF tools (jobs, repos, datasets) will be unavailable.[/dim]")
 
     # Resolve username for banner
     hf_user = None
-    try:
-        from huggingface_hub import HfApi
-        hf_user = HfApi(token=hf_token).whoami().get("name")
-    except Exception:
-        pass
+    if hf_token:
+        try:
+            from huggingface_hub import HfApi
+            hf_user = HfApi(token=hf_token).whoami().get("name")
+        except Exception:
+            pass
 
     print_banner(hf_user=hf_user)
 
@@ -744,7 +742,12 @@ async def main():
     config = load_config(config_path)
 
     # Create tool router with local mode
-    tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
+    tool_router = ToolRouter(
+        config.mcpServers,
+        hf_token=hf_token,
+        local_mode=True,
+        enable_hf_compute=config.enable_hf_compute,
+    )
 
     # Session holder for interrupt/model/status access
     session_holder = [None]
@@ -880,10 +883,9 @@ async def headless_main(
 
     hf_token = _get_hf_token()
     if not hf_token:
-        print("ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.", file=sys.stderr)
-        sys.exit(1)
+        print("Warning: No HF token found — HF tools will be unavailable.", file=sys.stderr)
 
-    print(f"HF token loaded", file=sys.stderr)
+    print(f"HF token: {'loaded' if hf_token else 'none'}", file=sys.stderr)
 
     config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
     config = load_config(config_path)
@@ -903,7 +905,12 @@ async def headless_main(
     submission_queue: asyncio.Queue = asyncio.Queue()
     event_queue: asyncio.Queue = asyncio.Queue()
 
-    tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
+    tool_router = ToolRouter(
+        config.mcpServers,
+        hf_token=hf_token,
+        local_mode=True,
+        enable_hf_compute=config.enable_hf_compute,
+    )
     session_holder: list = [None]
 
     agent_task = asyncio.create_task(

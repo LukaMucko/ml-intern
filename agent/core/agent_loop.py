@@ -24,36 +24,56 @@ ToolCall = ChatCompletionMessageToolCall
 _INFERENCE_API_KEY = os.environ.get("INFERENCE_TOKEN")
 
 
-def _resolve_hf_router_params(model_name: str) -> dict:
+def _resolve_hf_router_params(
+    model_name: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> dict:
     """
-    Build LiteLLM kwargs for HuggingFace Router models.
+    Build LiteLLM kwargs for the configured model.
 
-    api-inference.huggingface.co is deprecated; the new router lives at
-    router.huggingface.co/<provider>/v3/openai.  LiteLLM's built-in
-    ``huggingface/`` provider still targets the old endpoint, so we
-    rewrite model names to ``openai/`` and supply the correct api_base.
+    Priority:
+    1. Custom endpoint (base_url) → use it directly with openai/ provider.
+    2. HuggingFace Router models → rewrite to router.huggingface.co.
+    3. Everything else → pass through as-is.
 
-    Input format:  huggingface/<router_provider>/<org>/<model>
-    Example:       huggingface/novita/moonshotai/kimi-k2.5
+    HF Router input format: huggingface/<provider>/<org>/<model>
     """
-    if not model_name.startswith("huggingface/"):
-        return {"model": model_name}
+    # 1. Custom OpenAI-compatible endpoint
+    if base_url:
+        litellm_model = (
+            model_name if model_name.startswith("openai/") else f"openai/{model_name}"
+        )
+        params: dict = {
+            "model": litellm_model,
+            "api_base": base_url,
+        }
+        if api_key:
+            params["api_key"] = api_key
+        elif _INFERENCE_API_KEY:
+            params["api_key"] = _INFERENCE_API_KEY
+        return params
 
-    parts = model_name.split(
-        "/", 2
-    )  # ['huggingface', 'novita', 'moonshotai/kimi-k2.5']
-    if len(parts) < 3:
-        return {"model": model_name}
+    # 2. HuggingFace Router
+    if model_name.startswith("huggingface/"):
+        parts = model_name.split("/", 2)  # ['huggingface', 'novita', 'moonshotai/kimi-k2.5']
+        if len(parts) >= 3:
+            router_provider = parts[1]
+            actual_model = parts[2]
+            params = {
+                "model": f"openai/{actual_model}",
+                "api_base": f"https://router.huggingface.co/{router_provider}/v3/openai",
+            }
+            token = api_key or _INFERENCE_API_KEY
+            if token:
+                params["api_key"] = token
+            return params
 
-    router_provider = parts[1]
-    actual_model = parts[2]
-    api_key = _INFERENCE_API_KEY
-
-    return {
-        "model": f"openai/{actual_model}",
-        "api_base": f"https://router.huggingface.co/{router_provider}/v3/openai",
-        "api_key": api_key,
-    }
+    # 3. Pass-through (anthropic/, openai/, etc.)
+    params = {"model": model_name}
+    if api_key:
+        params["api_key"] = api_key
+    return params
 
 
 def _validate_tool_args(tool_args: dict) -> tuple[bool, str | None]:
@@ -205,6 +225,11 @@ async def _compact_and_notify(session: Session) -> None:
     await session.context_manager.compact(
         model_name=session.config.model_name,
         tool_specs=tool_specs,
+        llm_params=_resolve_hf_router_params(
+            session.config.model_name,
+            base_url=session.config.base_url,
+            api_key=session.config.api_key,
+        ),
     )
     new_length = session.context_manager.context_length
     if new_length != old_length:
@@ -506,7 +531,11 @@ class Handlers:
             tools = session.tool_router.get_tool_specs_for_llm()
             try:
                 # ── Call the LLM (streaming or non-streaming) ──
-                llm_params = _resolve_hf_router_params(session.config.model_name)
+                llm_params = _resolve_hf_router_params(
+                    session.config.model_name,
+                    base_url=session.config.base_url,
+                    api_key=session.config.api_key,
+                )
                 if session.stream:
                     llm_result = await _call_llm_streaming(session, messages, tools, llm_params)
                 else:

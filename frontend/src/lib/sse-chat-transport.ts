@@ -351,6 +351,9 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Request failed');
+      if (response.status === 404) {
+        this.sideChannel.onSessionDead(sessionId);
+      }
       throw new Error(`Chat request failed: ${response.status} ${errorText}`);
     }
 
@@ -371,6 +374,10 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
     // (e.g. after page refresh or wake-from-sleep reconnection).
     try {
       const infoRes = await apiFetch(`/api/session/${this.sessionId}`);
+      if (infoRes.status === 404) {
+        this.sideChannel.onSessionDead(this.sessionId);
+        return null;
+      }
       if (!infoRes.ok) return null;
       const info = await infoRes.json();
       if (!info.is_processing) return null;

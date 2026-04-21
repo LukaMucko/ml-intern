@@ -129,11 +129,20 @@ class ToolRouter:
     Based on codex-rs/core/src/tools/router.rs
     """
 
-    def __init__(self, mcp_servers: dict[str, MCPServerConfig], hf_token: str | None = None, local_mode: bool = False):
+    def __init__(
+        self,
+        mcp_servers: dict[str, MCPServerConfig],
+        hf_token: str | None = None,
+        local_mode: bool = False,
+        enable_hf_compute: bool = True,
+    ):
         self.tools: dict[str, ToolSpec] = {}
         self.mcp_servers: dict[str, dict[str, Any]] = {}
 
-        for tool in create_builtin_tools(local_mode=local_mode):
+        for tool in create_builtin_tools(
+            local_mode=local_mode,
+            enable_hf_compute=enable_hf_compute,
+        ):
             self.register_tool(tool)
 
         self.mcp_client: Client | None = None
@@ -279,7 +288,10 @@ class ToolRouter:
 # ============================================================================
 
 
-def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
+def create_builtin_tools(
+    local_mode: bool = False,
+    enable_hf_compute: bool = True,
+) -> list[ToolSpec]:
     """Create built-in tool specifications"""
     # in order of importance
     tools = [
@@ -317,18 +329,12 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
             parameters=HF_INSPECT_DATASET_TOOL_SPEC["parameters"],
             handler=hf_inspect_dataset_handler,
         ),
-        # Planning and job management tools
+        # Planning tools
         ToolSpec(
             name=PLAN_TOOL_SPEC["name"],
             description=PLAN_TOOL_SPEC["description"],
             parameters=PLAN_TOOL_SPEC["parameters"],
             handler=plan_tool_handler,
-        ),
-        ToolSpec(
-            name=HF_JOBS_TOOL_SPEC["name"],
-            description=HF_JOBS_TOOL_SPEC["description"],
-            parameters=HF_JOBS_TOOL_SPEC["parameters"],
-            handler=hf_jobs_handler,
         ),
         # HF Repo management tools
         ToolSpec(
@@ -363,8 +369,19 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
         ),
     ]
 
-    # Sandbox or local tools (highest priority)
-    if local_mode:
+    if enable_hf_compute:
+        tools.append(
+            ToolSpec(
+                name=HF_JOBS_TOOL_SPEC["name"],
+                description=HF_JOBS_TOOL_SPEC["description"],
+                parameters=HF_JOBS_TOOL_SPEC["parameters"],
+                handler=hf_jobs_handler,
+            )
+        )
+
+    # Sandbox or local tools (highest priority). When HF compute is disabled,
+    # keep local file/shell tools and do not expose sandbox_create.
+    if local_mode or not enable_hf_compute:
         from agent.tools.local_tools import get_local_tools
         tools = get_local_tools() + tools
     else:

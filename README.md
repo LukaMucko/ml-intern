@@ -228,3 +228,17 @@ Edit `configs/main_agent_config.json`:
 ```
 
 Note: Environment variables like `${YOUR_TOKEN}` are auto-substituted from `.env`.
+
+### Web Base Path and Custom LLM Endpoint
+
+For deployments under a URL prefix, set the same base path on the frontend build
+and backend runtime:
+
+```bash
+VITE_APP_BASE_PATH=/my-prefix npm run build
+APP_BASE_PATH=/my-prefix uvicorn main:app  # from backend/
+```
+
+For OpenAI-compatible endpoints, set `model_name`, `base_url`, and optionally
+`api_key` in the agent config. `model_name` is no longer restricted to the
+suggested model list.

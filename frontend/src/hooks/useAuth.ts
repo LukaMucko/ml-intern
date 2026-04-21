@@ -11,6 +11,7 @@
 import { useEffect } from 'react';
 import { useAgentStore } from '@/store/agentStore';
 import { logger } from '@/utils/logger';
+import { appPath } from '@/utils/paths';
 
 /** Check if we're running inside an iframe. */
 export function isInIframe(): boolean {
@@ -23,7 +24,7 @@ export function isInIframe(): boolean {
 
 /** Redirect to the server-side OAuth login. */
 export function triggerLogin(): void {
-  window.location.href = '/auth/login';
+  window.location.href = appPath('/auth/login');
 }
 
 /**
@@ -39,7 +40,7 @@ export function useAuth() {
     async function checkAuth() {
       try {
         // Check if user is already authenticated (cookie-based)
-        const response = await fetch('/auth/me', { credentials: 'include' });
+        const response = await fetch(appPath('/auth/me'), { credentials: 'include' });
         if (response.ok) {
           const data = await response.json();
           if (!cancelled && data.authenticated) {
@@ -55,7 +56,7 @@ export function useAuth() {
         }
 
         // Not authenticated — check if auth is enabled
-        const statusRes = await fetch('/auth/status', { credentials: 'include' });
+        const statusRes = await fetch(appPath('/auth/status'), { credentials: 'include' });
         const statusData = await statusRes.json();
         if (!statusData.auth_enabled) {
           // Dev mode — no OAuth configured

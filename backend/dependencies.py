@@ -17,6 +17,17 @@ logger = logging.getLogger(__name__)
 OPENID_PROVIDER_URL = os.environ.get("OPENID_PROVIDER_URL", "https://huggingface.co")
 AUTH_ENABLED = bool(os.environ.get("OAUTH_CLIENT_ID", ""))
 
+
+def _normalize_base_path(value: str | None) -> str:
+    if not value or value == "/":
+        return ""
+    return "/" + value.strip("/")
+
+
+APP_BASE_PATH = _normalize_base_path(
+    os.environ.get("APP_BASE_PATH") or os.environ.get("ROOT_PATH")
+)
+
 # Simple in-memory token cache: token -> (user_info, expiry_time)
 _token_cache: dict[str, tuple[dict[str, Any], float]] = {}
 TOKEN_CACHE_TTL = 300  # 5 minutes
@@ -136,8 +147,7 @@ async def get_current_user(request: Request) -> dict[str, Any]:
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Not authenticated. Please log in via /auth/login.",
+        detail=f"Not authenticated. Please log in via {APP_BASE_PATH}/auth/login.",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
 

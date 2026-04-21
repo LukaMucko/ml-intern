@@ -23,6 +23,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _normalize_base_path(value: str | None) -> str:
+    if not value or value == "/":
+        return ""
+    return "/" + value.strip("/")
+
+
+APP_BASE_PATH = _normalize_base_path(
+    os.environ.get("APP_BASE_PATH") or os.environ.get("ROOT_PATH")
+)
+
+
+class BasePathMiddleware:
+    """Allow the app to run directly under APP_BASE_PATH without proxy rewrites."""
+
+    def __init__(self, app, base_path: str) -> None:
+        self.app = app
+        self.base_path = base_path
+
+    async def __call__(self, scope, receive, send):
+        if self.base_path and scope["type"] in {"http", "websocket"}:
+            path = scope.get("path", "")
+            if path == self.base_path:
+                scope = dict(scope)
+                scope["path"] = "/"
+                scope["root_path"] = scope.get("root_path") or self.base_path
+            elif path.startswith(f"{self.base_path}/"):
+                scope = dict(scope)
+                scope["path"] = path[len(self.base_path):] or "/"
+                scope["root_path"] = scope.get("root_path") or self.base_path
+        await self.app(scope, receive, send)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -36,7 +68,10 @@ app = FastAPI(
     description="ML Engineering Assistant API",
     version="1.0.0",
     lifespan=lifespan,
+    root_path=APP_BASE_PATH,
 )
+
+app.add_middleware(BasePathMiddleware, base_path=APP_BASE_PATH)
 
 # CORS middleware for development
 app.add_middleware(

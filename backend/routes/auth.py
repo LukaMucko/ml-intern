@@ -21,6 +21,17 @@ OAUTH_CLIENT_ID = os.environ.get("OAUTH_CLIENT_ID", "")
 OAUTH_CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
 OPENID_PROVIDER_URL = os.environ.get("OPENID_PROVIDER_URL", "https://huggingface.co")
 
+
+def _normalize_base_path(value: str | None) -> str:
+    if not value or value == "/":
+        return ""
+    return "/" + value.strip("/")
+
+
+APP_BASE_PATH = _normalize_base_path(
+    os.environ.get("APP_BASE_PATH") or os.environ.get("ROOT_PATH")
+)
+
 # In-memory OAuth state store with expiry (5 min TTL)
 _OAUTH_STATE_TTL = 300
 oauth_states: dict[str, dict] = {}
@@ -39,9 +50,18 @@ def get_redirect_uri(request: Request) -> str:
     # In HF Spaces, use the SPACE_HOST if available
     space_host = os.environ.get("SPACE_HOST")
     if space_host:
-        return f"https://{space_host}/auth/callback"
+        return f"https://{space_host}{APP_BASE_PATH}/auth/callback"
     # Otherwise construct from request
     return str(request.url_for("oauth_callback"))
+
+
+def _app_root_url(request: Request) -> str:
+    root_path = request.scope.get("root_path") or APP_BASE_PATH
+    return f"{root_path}/" if root_path else "/"
+
+
+def _cookie_path(request: Request) -> str:
+    return request.scope.get("root_path") or APP_BASE_PATH or "/"
 
 
 @router.get("/login")
@@ -135,7 +155,7 @@ async def oauth_callback(
     # Set access token as HttpOnly cookie (not in URL — avoids leaks via
     # Referrer headers, browser history, and server logs)
     is_production = bool(os.environ.get("SPACE_HOST"))
-    response = RedirectResponse(url="/", status_code=302)
+    response = RedirectResponse(url=_app_root_url(request), status_code=302)
     response.set_cookie(
         key="hf_access_token",
         value=access_token,
@@ -143,16 +163,16 @@ async def oauth_callback(
         secure=is_production,  # Secure flag only in production (HTTPS)
         samesite="lax",
         max_age=3600 * 24 * 7,  # 7 days
-        path="/",
+        path=_cookie_path(request),
     )
     return response
 
 
 @router.get("/logout")
-async def logout() -> RedirectResponse:
+async def logout(request: Request) -> RedirectResponse:
     """Log out the user by clearing the auth cookie."""
-    response = RedirectResponse(url="/")
-    response.delete_cookie(key="hf_access_token", path="/")
+    response = RedirectResponse(url=_app_root_url(request))
+    response.delete_cookie(key="hf_access_token", path=_cookie_path(request))
     return response
 
 

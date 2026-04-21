@@ -171,10 +171,16 @@ class SessionManager:
 
         def _create_session_sync():
             t0 = _time.monotonic()
-            tool_router = ToolRouter(self.config.mcpServers, hf_token=hf_token)
+            tool_router = ToolRouter(
+                self.config.mcpServers,
+                hf_token=hf_token,
+                local_mode=not self.config.enable_hf_compute,
+                enable_hf_compute=self.config.enable_hf_compute,
+            )
             session = Session(
                 event_queue, config=self.config, tool_router=tool_router,
                 hf_token=hf_token,
+                local_mode=not self.config.enable_hf_compute,
             )
             t1 = _time.monotonic()
             logger.info(f"Session initialized in {t1 - t0:.2f}s")
@@ -333,6 +339,24 @@ class SessionManager:
         """Compact context in a session."""
         operation = Operation(op_type=OpType.COMPACT)
         return await self.submit(session_id, operation)
+
+    async def update_model(self, model_name: str) -> int:
+        """Set the configured model and apply it to active sessions.
+
+        Returns the number of active sessions updated.
+        """
+        async with self._lock:
+            self.config.model_name = model_name
+            active_sessions = [
+                agent_session
+                for agent_session in self.sessions.values()
+                if agent_session.is_active
+            ]
+
+        for agent_session in active_sessions:
+            agent_session.session.update_model(model_name)
+
+        return len(active_sessions)
 
     async def shutdown_session(self, session_id: str) -> bool:
         """Shutdown a specific session."""

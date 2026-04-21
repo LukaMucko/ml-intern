@@ -213,10 +213,28 @@ RESEARCH_TOOL_SPEC = {
 }
 
 
-def _resolve_llm_params(model_name: str) -> dict:
+def _resolve_llm_params(
+    model_name: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> dict:
     """Build LiteLLM kwargs, reusing the HF router logic from agent_loop."""
+    if base_url:
+        litellm_model = (
+            model_name if model_name.startswith("openai/") else f"openai/{model_name}"
+        )
+        params = {"model": litellm_model, "api_base": base_url}
+        if api_key:
+            params["api_key"] = api_key
+        elif os.environ.get("INFERENCE_TOKEN"):
+            params["api_key"] = os.environ["INFERENCE_TOKEN"]
+        return params
+
     if not model_name.startswith("huggingface/"):
-        return {"model": model_name}
+        params = {"model": model_name}
+        if api_key:
+            params["api_key"] = api_key
+        return params
 
     parts = model_name.split("/", 2)  # ["huggingface", "<provider>", "<org>/<model>"]
     if len(parts) < 3:
@@ -224,11 +242,14 @@ def _resolve_llm_params(model_name: str) -> dict:
 
     provider = parts[1]
     model_id = parts[2]
-    return {
+    params = {
         "model": f"openai/{model_id}",
         "api_base": f"https://router.huggingface.co/{provider}/v3/openai",
-        "api_key": os.environ.get("INFERENCE_TOKEN", ""),
     }
+    token = api_key or os.environ.get("INFERENCE_TOKEN")
+    if token:
+        params["api_key"] = token
+    return params
 
 
 def _get_research_model(main_model: str) -> str:
@@ -263,8 +284,12 @@ async def research_handler(
 
     # Use a cheaper/faster model for research
     main_model = session.config.model_name
-    research_model = _get_research_model(main_model)
-    llm_params = _resolve_llm_params(research_model)
+    research_model = main_model if session.config.base_url else _get_research_model(main_model)
+    llm_params = _resolve_llm_params(
+        research_model,
+        base_url=session.config.base_url,
+        api_key=session.config.api_key,
+    )
 
     # Get read-only tool specs from the session's tool router
     tool_specs = [

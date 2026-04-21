@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { useAgentStore } from '@/store/agentStore';
+import { appPath } from '@/utils/paths';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -24,7 +25,7 @@ export function useOrgMembership(enabled: boolean) {
 
     const check = async () => {
       try {
-        const res = await fetch('/auth/org-membership', { credentials: 'include' });
+        const res = await fetch(appPath('/auth/org-membership'), { credentials: 'include' });
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (cancelled) return;

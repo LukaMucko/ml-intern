@@ -10,6 +10,7 @@ import logging
 import os
 from typing import Any
 
+import httpx
 from dependencies import get_current_user
 from fastapi import (
     APIRouter,
@@ -36,30 +37,65 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
 
-AVAILABLE_MODELS = [
-    {
-        "id": "anthropic/claude-opus-4-6",
-        "label": "Claude Opus 4.6",
-        "provider": "anthropic",
-        "recommended": True,
-    },
-    {
-        "id": "huggingface/fireworks-ai/MiniMaxAI/MiniMax-M2.5",
-        "label": "MiniMax M2.5",
-        "provider": "huggingface",
-        "recommended": True,
-    },
-    {
-        "id": "huggingface/novita/moonshotai/kimi-k2.5",
-        "label": "Kimi K2.5",
-        "provider": "huggingface",
-    },
-    {
-        "id": "huggingface/novita/zai-org/glm-5",
-        "label": "GLM 5",
-        "provider": "huggingface",
-    },
-]
+
+def _models_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}/models"
+
+
+async def _configured_model_options() -> tuple[list[dict[str, Any]], str | None]:
+    """Return models exposed by the configured OpenAI-compatible base_url."""
+    base_url = session_manager.config.base_url
+    if not base_url:
+        return (
+            [
+                {
+                    "id": session_manager.config.model_name,
+                    "label": session_manager.config.model_name,
+                }
+            ],
+            None,
+        )
+
+    headers = {}
+    if session_manager.config.api_key:
+        headers["Authorization"] = f"Bearer {session_manager.config.api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(_models_url(base_url), headers=headers)
+            response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        logger.warning("Failed to fetch models from configured base_url: %s", e)
+        return (
+            [
+                {
+                    "id": session_manager.config.model_name,
+                    "label": session_manager.config.model_name,
+                }
+            ],
+            str(e)[:500],
+        )
+
+    raw_models = data.get("data", []) if isinstance(data, dict) else []
+    models = []
+    for item in raw_models:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if isinstance(model_id, str) and model_id.strip():
+            owned_by = item.get("owned_by")
+            models.append(
+                {
+                    "id": model_id,
+                    "label": model_id,
+                    "provider": owned_by
+                    if isinstance(owned_by, str)
+                    else "configured router",
+                }
+            )
+
+    return models, None
 
 
 def _check_session_access(session_id: str, user: dict[str, Any]) -> None:
@@ -93,7 +129,11 @@ async def llm_health_check() -> LLMHealthResponse:
     """
     model = session_manager.config.model_name
     try:
-        llm_params = _resolve_hf_router_params(model)
+        llm_params = _resolve_hf_router_params(
+            model,
+            base_url=session_manager.config.base_url,
+            api_key=session_manager.config.api_key,
+        )
         await acompletion(
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=1,
@@ -137,9 +177,12 @@ async def llm_health_check() -> LLMHealthResponse:
 @router.get("/config/model")
 async def get_model() -> dict:
     """Get current model and available models. No auth required."""
+    available, models_error = await _configured_model_options()
     return {
         "current": session_manager.config.model_name,
-        "available": AVAILABLE_MODELS,
+        "available": available,
+        "base_url": session_manager.config.base_url,
+        "models_error": models_error,
     }
 
 
@@ -147,14 +190,17 @@ async def get_model() -> dict:
 async def set_model(body: dict, user: dict = Depends(get_current_user)) -> dict:
     """Set the LLM model. Applies to new conversations."""
     model_id = body.get("model")
-    if not model_id:
+    if not isinstance(model_id, str) or not model_id.strip():
         raise HTTPException(status_code=400, detail="Missing 'model' field")
-    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
-    if model_id not in valid_ids:
-        raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
-    session_manager.config.model_name = model_id
-    logger.info(f"Model changed to {model_id} by {user.get('username', 'unknown')}")
-    return {"model": model_id}
+    model_id = model_id.strip()
+    updated_sessions = await session_manager.update_model(model_id)
+    logger.info(
+        "Model changed to %s by %s (%d active sessions updated)",
+        model_id,
+        user.get("username", "unknown"),
+        updated_sessions,
+    )
+    return {"model": model_id, "updated_sessions": updated_sessions}
 
 
 @router.post("/title")
@@ -163,7 +209,11 @@ async def generate_title(
 ) -> dict:
     """Generate a short title for a chat session based on the first user message."""
     model = session_manager.config.model_name
-    llm_params = _resolve_hf_router_params(model)
+    llm_params = _resolve_hf_router_params(
+        model,
+        base_url=session_manager.config.base_url,
+        api_key=session_manager.config.api_key,
+    )
     try:
         response = await acompletion(
             messages=[
@@ -473,5 +523,3 @@ async def shutdown_session(
     if not success:
         raise HTTPException(status_code=404, detail="Session not found or inactive")
     return {"status": "shutdown_requested", "session_id": session_id}
-
-

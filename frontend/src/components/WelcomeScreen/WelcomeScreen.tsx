@@ -14,6 +14,7 @@ import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { apiFetch } from '@/utils/api';
+import { appPath } from '@/utils/paths';
 import { isInIframe, triggerLogin } from '@/hooks/useAuth';
 import { useOrgMembership } from '@/hooks/useOrgMembership';
 
@@ -275,7 +276,7 @@ export default function WelcomeScreen() {
   const spaceHost =
     typeof window !== 'undefined'
       ? window.location.hostname.includes('.hf.space')
-        ? window.location.origin
+        ? new URL(appPath('/'), window.location.origin).toString().replace(/\/$/, '')
         : 'https://smolagents-ml-intern.hf.space'
       : '';
 
@@ -295,7 +296,7 @@ export default function WelcomeScreen() {
       {/* Logo */}
       <Box
         component="img"
-        src="/smolagents.webp"
+        src={appPath('/smolagents.webp')}
         alt="smolagents"
         sx={{ width: 80, height: 80, mb: 2.5, display: 'block' }}
       />
