@@ -1,5 +1,5 @@
 {
-  "model_name": "claude-opus-4-7",
+  "model_name": "kimi-k2.6",
   "base_url": "${ANTHROPIC_BASE_URL}",
   "api_key": "${ANTHROPIC_API_KEY}",
   "save_sessions": true,
