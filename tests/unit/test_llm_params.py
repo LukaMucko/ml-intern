@@ -5,6 +5,7 @@ from agent.core.llm_params import (
     UnsupportedEffortError,
     _resolve_hf_router_token,
     _resolve_llm_params,
+    router_override_from_config,
 )
 from agent.core.model_ids import HF_ROUTER_BASE_URL
 
@@ -230,3 +231,82 @@ def test_hf_request_token_does_not_use_cached_login(monkeypatch):
     monkeypatch.setattr(huggingface_hub, "get_token", lambda: "cached-token")
 
     assert resolve_hf_request_token(Request()) is None
+
+
+def test_router_override_from_config_returns_none_without_base_url():
+    from types import SimpleNamespace
+
+    assert router_override_from_config(None) is None
+    assert router_override_from_config(SimpleNamespace(model_name="x")) is None
+    assert router_override_from_config(SimpleNamespace(base_url="")) is None
+
+
+def test_custom_router_params_route_to_gateway_base_url(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    router = {
+        "base_url": "https://llms.apps.aithyra.at",
+        "api_key": "sk-gateway",
+        "proxy": "http://proxy.local:8080",
+        "provider_routing": {"only": ["fireworks"], "allow_fallbacks": False},
+    }
+
+    params = _resolve_llm_params(
+        "z-ai/glm-5.2",
+        reasoning_effort="high",
+        router=router,
+    )
+
+    assert params["model"] == "openai/z-ai/glm-5.2"
+    assert params["api_base"] == "https://llms.apps.aithyra.at/v1"
+    assert params["api_key"] == "sk-gateway"
+    assert params["proxy"] == "http://proxy.local:8080"
+    assert params["extra_body"] == {
+        "only": ["fireworks"],
+        "allow_fallbacks": False,
+        "reasoning_effort": "high",
+    }
+
+
+def test_custom_router_appends_v1_only_when_missing(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    router = {"base_url": "https://llms.apps.aithyra.at/v1"}
+
+    params = _resolve_llm_params("claude-opus-4-8", router=router)
+
+    assert params["api_base"] == "https://llms.apps.aithyra.at/v1"
+    assert params["api_key"] == "sk-env"
+
+
+def test_custom_router_strips_existing_openai_prefix():
+    router = {"base_url": "https://gateway.test"}
+
+    params = _resolve_llm_params("openai/gpt-5.4", router=router)
+
+    assert params["model"] == "openai/gpt-5.4"
+
+
+def test_custom_router_normalizes_minimal_effort():
+    router = {"base_url": "https://gateway.test"}
+
+    params = _resolve_llm_params("gpt-5.4", reasoning_effort="minimal", router=router)
+
+    assert params["extra_body"]["reasoning_effort"] == "low"
+
+
+def test_custom_router_accepts_max_effort_without_strict_rejection():
+    router = {"base_url": "https://gateway.test"}
+
+    params = _resolve_llm_params(
+        "gpt-5.4", reasoning_effort="max", strict=True, router=router
+    )
+
+    assert params["extra_body"]["reasoning_effort"] == "max"
+
+
+def test_custom_router_ignores_hf_token_and_does_not_hit_hf_router():
+    router = {"base_url": "https://gateway.test", "api_key": "sk-gateway"}
+
+    params = _resolve_llm_params("z-ai/glm-5.2", "an-hf-token", router=router)
+
+    assert params["api_base"] != HF_ROUTER_BASE_URL
+    assert params["api_key"] == "sk-gateway"

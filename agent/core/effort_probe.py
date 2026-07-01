@@ -28,7 +28,11 @@ from typing import Any
 
 from litellm import acompletion
 
-from agent.core.llm_params import UnsupportedEffortError, _resolve_llm_params
+from agent.core.llm_params import (
+    UnsupportedEffortError,
+    _resolve_llm_params,
+    router_override_from_config,
+)
 from agent.core.prompt_caching import router_session_id_for, with_prompt_cache_params
 from agent.core.yolo_budget import maybe_pause_yolo_after_spend
 
@@ -190,6 +194,7 @@ async def probe_effort(
                 hf_token,
                 reasoning_effort=effort,
                 strict=True,
+                router=router_override_from_config(getattr(session, "config", None)),
             )
             params = with_prompt_cache_params(
                 params,

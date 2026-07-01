@@ -1193,9 +1193,13 @@ async def main(model: str | None = None, sandbox_tools: bool = False):
     local_mode = _is_local_tool_runtime(config)
 
     # HF token — required for Hub-backed models/tools and sandbox tools, but
-    # not for local LLMs using only local filesystem tools.
+    # not for local LLMs or custom-router models using only local filesystem
+    # tools. A custom OpenAI-compatible gateway authenticates with its own
+    # api_key, so no HF token is needed for LLM calls.
     hf_token = resolve_hf_token()
-    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
+    custom_router = bool(getattr(config, "base_url", None))
+    needs_hf_token = not (is_local_model_id(config.model_name) or custom_router)
+    if not hf_token and (needs_hf_token or not local_mode):
         hf_token = await _prompt_and_save_hf_token(prompt_session)
 
     # Resolve username and plan from one whoami-v2 request for banner and CTAs.
@@ -1447,7 +1451,9 @@ async def headless_main(
     local_mode = _is_local_tool_runtime(config)
 
     hf_token = resolve_hf_token()
-    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
+    custom_router = bool(getattr(config, "base_url", None))
+    needs_hf_token = not (is_local_model_id(config.model_name) or custom_router)
+    if not hf_token and (needs_hf_token or not local_mode):
         print(
             "ERROR: No HF token found. Set HF_TOKEN or run `hf auth login`.",
             file=sys.stderr,
@@ -1456,6 +1462,10 @@ async def headless_main(
 
     if hf_token:
         print("HF token loaded", file=sys.stderr)
+    else:
+        print(
+            "HF token: none (custom router — using ANTHROPIC_API_KEY)", file=sys.stderr
+        )
 
     notification_gateway = NotificationGateway(config.messaging)
     await notification_gateway.start()

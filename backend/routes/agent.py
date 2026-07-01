@@ -7,9 +7,11 @@ dependency. In dev mode (no OAUTH_CLIENT_ID), auth is bypassed automatically.
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
+import httpx
 from dependencies import (
     INTERNAL_HF_TOKEN_KEY,
     get_current_user,
@@ -53,8 +55,8 @@ from session_manager import (
 
 from agent.core.hf_access import get_jobs_access
 from agent.core.hf_tokens import resolve_hf_request_token
+from agent.core.llm_params import _resolve_llm_params, router_override_from_config
 from agent.core.local_models import local_model_provider
-from agent.core.llm_params import _resolve_llm_params
 from agent.core.model_ids import (
     CLAUDE_OPUS_48_MODEL_ID,
     DEEPSEEK_V4_PRO_MODEL_ID,
@@ -154,7 +156,69 @@ def _valid_model_ids() -> set[str]:
     return {m["id"] for m in AVAILABLE_MODELS}
 
 
+def _custom_router_active() -> bool:
+    return bool(getattr(session_manager.config, "base_url", None))
+
+
+async def _custom_router_models() -> tuple[list[dict[str, Any]], str | None]:
+    """Fetch the model list exposed by the configured custom router gateway.
+
+    Returns ``(models, error)``. On failure, falls back to the single
+    configured ``model_name`` so the UI still has something to show.
+    """
+    base_url = str(session_manager.config.base_url or "").rstrip("/")
+    headers = {}
+    api_key = getattr(session_manager.config, "api_key", None) or os.environ.get(
+        "ANTHROPIC_API_KEY"
+    )
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    models_url = f"{base_url}/models" if not base_url.endswith("/models") else base_url
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(models_url, headers=headers)
+            response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        logger.warning("Failed to fetch models from custom router: %s", e)
+        return (
+            [
+                {
+                    "id": session_manager.config.model_name,
+                    "label": session_manager.config.model_name,
+                }
+            ],
+            str(e)[:500],
+        )
+
+    raw_models = data.get("data", []) if isinstance(data, dict) else []
+    models: list[dict[str, Any]] = []
+    for item in raw_models:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if isinstance(model_id, str) and model_id.strip():
+            owned_by = item.get("owned_by")
+            models.append(
+                {
+                    "id": model_id,
+                    "label": model_id,
+                    "provider": (
+                        owned_by if isinstance(owned_by, str) else "custom router"
+                    ),
+                }
+            )
+    return models, None
+
+
 def _validate_model_id(model_id: str | None) -> None:
+    # When a custom OpenAI-compatible router is configured, any model id the
+    # gateway exposes is valid — the static HF Router catalog doesn't apply.
+    if _custom_router_active():
+        if not model_id:
+            return
+        return
     if not model_id or model_id in _valid_model_ids():
         return
     raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
@@ -179,6 +243,9 @@ def _user_hf_token(user: dict[str, Any] | None) -> str | None:
 
 
 def _model_requires_hf_router_token(model_id: str | None) -> bool:
+    # A custom router authenticates with its own api_key, not an HF token.
+    if _custom_router_active():
+        return False
     normalized = strip_huggingface_model_prefix(model_id) or model_id or ""
     return local_model_provider(normalized) is None
 
@@ -306,6 +373,7 @@ async def llm_health_check(
             model,
             hf_token,
             reasoning_effort="high",
+            router=router_override_from_config(session_manager.config),
         )
         await acompletion(
             messages=[{"role": "user", "content": "hi"}],
@@ -350,6 +418,14 @@ async def llm_health_check(
 @router.get("/config/model")
 async def get_model() -> dict:
     """Get current model and available models. No auth required."""
+    if _custom_router_active():
+        available, models_error = await _custom_router_models()
+        return {
+            "current": session_manager.config.model_name,
+            "available": available,
+            "base_url": session_manager.config.base_url,
+            "models_error": models_error,
+        }
     return {
         "current": session_manager.config.model_name,
         "available": AVAILABLE_MODELS,
@@ -365,18 +441,26 @@ async def generate_title(
 ) -> dict:
     """Generate a short title for a chat session based on the first user message.
 
-    Always uses gpt-oss-120b via Cerebras on the HF router. The tab headline
-    renders as plain text, so the model is told to avoid markdown and any
-    stray formatting characters are stripped before returning. gpt-oss is a
-    reasoning model — reasoning_effort=low keeps the reasoning budget small
-    so the 60-token output budget isn't consumed before the title is written.
+    Uses gpt-oss-120b via Cerebras on the HF router by default. When a custom
+    router is configured, the session's configured model is used instead
+    (routed through the gateway), since the HF router id won't resolve there.
+    The tab headline renders as plain text, so the model is told to avoid
+    markdown and any stray formatting characters are stripped before
+    returning. reasoning_effort=low keeps the reasoning budget small so the
+    60-token output budget isn't consumed before the title is written.
     """
     try:
         await _check_session_access(request.session_id, user)
+        router = router_override_from_config(session_manager.config)
+        if router:
+            title_model = session_manager.config.model_name
+        else:
+            title_model = "openai/gpt-oss-120b:cerebras"
         llm_params = _resolve_llm_params(
-            "openai/gpt-oss-120b:cerebras",
+            title_model,
             _user_hf_token(user),
             reasoning_effort="low",
+            router=router,
         )
         llm_params = with_prompt_cache_params(llm_params)
         response = await acompletion(

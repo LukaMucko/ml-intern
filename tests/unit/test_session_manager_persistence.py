@@ -854,9 +854,20 @@ async def test_yolo_budget_checker_uses_local_ledger_when_billing_lags(monkeypat
 
 
 def test_unknown_saved_model_defaults_to_glm():
-    model = SessionManager._model_from_saved_metadata("unsupported/model")
+    manager = _manager_with_store(NoopSessionStore())
+    model = manager._model_from_saved_metadata("unsupported/model")
 
     assert model == GLM_52_MODEL_ID
+
+
+def test_custom_router_keeps_unknown_saved_model():
+    manager = _manager_with_store(NoopSessionStore())
+    manager.config = SimpleNamespace(
+        model_name="z-ai/glm-5.2", base_url="https://example.test/v1"
+    )
+    model = manager._model_from_saved_metadata("custom/model-id")
+
+    assert model == "custom/model-id"
 
 
 @pytest.mark.asyncio

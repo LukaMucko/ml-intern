@@ -1,5 +1,13 @@
 {
-  "model_name": "zai-org/GLM-5.2:novita",
+  "model_name": "z-ai/glm-5.2",
+  "base_url": "${ANTHROPIC_BASE_URL:-}",
+  "api_key": "${ANTHROPIC_API_KEY:-}",
+  "provider_routing": {
+    "only": ["fireworks"],
+    "allow_fallbacks": false,
+    "sort": "throughput"
+  },
+  "reasoning_effort": "high",
   "save_sessions": true,
   "session_dataset_repo": "smolagents/ml-intern-sessions",
   "share_traces": true,

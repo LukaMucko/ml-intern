@@ -50,6 +50,7 @@ async def test_llm_health_uses_default_and_request_hf_token(monkeypatch):
         session_hf_token=None,
         reasoning_effort=None,
         strict=False,
+        router=None,
     ):
         resolved.append((model_name, session_hf_token, reasoning_effort, strict))
         return {
@@ -117,6 +118,7 @@ async def test_generate_title_omits_session_id_from_hf_router(monkeypatch):
         session_hf_token=None,
         reasoning_effort=None,
         strict=False,
+        router=None,
     ):
         return {
             "model": f"openai/{model_name}",
@@ -148,6 +150,11 @@ async def test_generate_title_omits_session_id_from_hf_router(monkeypatch):
     async def fake_update_session_title(session_id, title):
         titles.append((session_id, title))
 
+    monkeypatch.setattr(
+        agent.session_manager,
+        "config",
+        SimpleNamespace(model_name=agent.DEFAULT_MODEL_ID),
+    )
     monkeypatch.setattr(agent, "_resolve_llm_params", fake_resolve_llm_params)
     monkeypatch.setattr(agent, "acompletion", fake_acompletion)
     monkeypatch.setattr(agent, "_check_session_access", fake_check_session_access)
@@ -242,6 +249,11 @@ async def test_switching_to_unknown_model_id_is_rejected(monkeypatch):
         return SimpleNamespace(user_id=user["user_id"])
 
     monkeypatch.setattr(agent, "_check_session_access", fake_check_session_access)
+    monkeypatch.setattr(
+        agent.session_manager,
+        "config",
+        SimpleNamespace(model_name=agent.DEFAULT_MODEL_ID),
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await agent.set_session_model(

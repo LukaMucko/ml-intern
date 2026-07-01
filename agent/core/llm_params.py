@@ -6,6 +6,7 @@ creating circular imports.
 """
 
 import os
+from typing import Any
 
 from agent.core.hf_tokens import resolve_hf_router_token
 from agent.core.local_models import (
@@ -25,6 +26,26 @@ from agent.core.model_ids import (
 def _resolve_hf_router_token(session_hf_token: str | None = None) -> str | None:
     """Backward-compatible private wrapper used by tests and older imports."""
     return resolve_hf_router_token(session_hf_token)
+
+
+def router_override_from_config(config: Any) -> dict[str, Any] | None:
+    """Extract the custom-router override from a Config object, if active.
+
+    Returns ``None`` when no custom ``base_url`` is configured, so callers can
+    pass the result straight into ``_resolve_llm_params(router=...)`` without
+    branching themselves.
+    """
+    if config is None:
+        return None
+    base_url = getattr(config, "base_url", None)
+    if not base_url:
+        return None
+    return {
+        "base_url": base_url,
+        "api_key": getattr(config, "api_key", None),
+        "proxy": getattr(config, "llm_proxy", None),
+        "provider_routing": getattr(config, "provider_routing", None),
+    }
 
 
 # Effort levels accepted on the wire.
@@ -87,14 +108,71 @@ def _resolve_local_model_params(
     }
 
 
+def _resolve_custom_router_params(
+    model_name: str,
+    router: dict[str, Any],
+    reasoning_effort: str | None = None,
+    strict: bool = False,
+) -> dict:
+    """Build LiteLLM kwargs for a custom OpenAI-compatible router gateway.
+
+    The gateway is expected to speak the OpenAI Chat Completions API and
+    accept LiteLLM-style routing controls (``provider.only``,
+    ``allow_fallbacks``, ``sort``) via ``extra_body`` — e.g. a LiteLLM proxy
+    such as the Aithyra gateway. ``reasoning_effort`` is forwarded in the
+    same ``extra_body`` so the gateway can pass it through to the backing
+    provider. Unlike the HF Router branch, no effort level is rejected
+    up-front: the gateway decides what's valid.
+    """
+    base_url = str(router.get("base_url") or "").strip()
+    if not base_url:
+        raise ValueError("custom router requires a base_url")
+
+    bare = model_name.removeprefix("openai/")
+    params: dict[str, Any] = {
+        "model": f"openai/{bare}",
+        "api_base": _local_api_base(base_url),
+    }
+
+    api_key = router.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        params["api_key"] = api_key
+
+    proxy = router.get("proxy")
+    if proxy:
+        params["proxy"] = proxy
+
+    extra_body: dict[str, Any] = {}
+    routing = router.get("provider_routing")
+    if isinstance(routing, dict):
+        extra_body.update(routing)
+    if reasoning_effort:
+        extra_body["reasoning_effort"] = (
+            "low" if reasoning_effort == "minimal" else reasoning_effort
+        )
+    if extra_body:
+        params["extra_body"] = extra_body
+    return params
+
+
 def _resolve_llm_params(
     model_name: str,
     session_hf_token: str | None = None,
     reasoning_effort: str | None = None,
     strict: bool = False,
+    router: dict[str, Any] | None = None,
 ) -> dict:
     """
     Build LiteLLM kwargs for a given model id.
+
+    • ``router`` with a ``base_url`` — a custom OpenAI-compatible gateway
+      (e.g. a LiteLLM proxy such as the Aithyra gateway). The model id is
+      sent as ``openai/<model>`` to ``base_url`` (``/v1`` appended when
+      missing), authenticated with ``router['api_key']`` (or
+      ``ANTHROPIC_API_KEY``), optionally through ``router['proxy']``.
+      ``router['provider_routing']`` and ``reasoning_effort`` are forwarded
+      via ``extra_body`` so the gateway can pin providers and pass thinking
+      controls through. No effort level is rejected up-front.
 
     • ``ollama/<model>``, ``vllm/<model>``, ``lm_studio/<model>``, and
       ``llamacpp/<model>`` — local OpenAI-compatible endpoints. The id prefix
@@ -128,6 +206,11 @@ def _resolve_llm_params(
 
     if local_model_provider(normalized_model) is not None:
         return _resolve_local_model_params(normalized_model, reasoning_effort, strict)
+
+    if router and router.get("base_url"):
+        return _resolve_custom_router_params(
+            normalized_model, router, reasoning_effort, strict
+        )
 
     hf_model = normalized_model
     api_key = _resolve_hf_router_token(session_hf_token)

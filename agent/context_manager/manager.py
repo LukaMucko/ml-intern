@@ -142,13 +142,14 @@ async def summarize_messages(
 
     Returns ``(summary_text, completion_tokens)``.
     """
-    from agent.core.llm_params import _resolve_llm_params
+    from agent.core.llm_params import _resolve_llm_params, router_override_from_config
 
     prompt_messages = list(messages) + [Message(role="user", content=prompt)]
     llm_params = _resolve_llm_params(
         model_name,
         hf_token,
         reasoning_effort="high",
+        router=router_override_from_config(getattr(session, "config", None)),
     )
     llm_params = with_prompt_cache_params(
         llm_params,

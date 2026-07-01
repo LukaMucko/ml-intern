@@ -261,12 +261,16 @@ class SessionManager:
         """
         agent_session.last_active_at = datetime.utcnow()
 
-    @staticmethod
     def _model_from_saved_metadata(
+        self,
         model: str | None,
     ) -> str:
         normalized = strip_huggingface_model_prefix(model)
         if normalized and is_known_router_model_id(normalized):
+            return normalized
+        # A custom router accepts model ids outside the HF Router catalog,
+        # so trust the persisted id when a router is configured.
+        if normalized and getattr(self.config, "base_url", None):
             return normalized
 
         fallback_model = GLM_52_MODEL_ID

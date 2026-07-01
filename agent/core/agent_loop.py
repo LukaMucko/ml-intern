@@ -31,7 +31,7 @@ from agent.core.hf_access import (
     HF_PRO_SUBSCRIBE_URL,
     is_inference_billing_error,
 )
-from agent.core.llm_params import _resolve_llm_params
+from agent.core.llm_params import _resolve_llm_params, router_override_from_config
 from agent.core.prompt_caching import (
     router_session_id_for,
     with_prompt_cache_params,
@@ -615,6 +615,7 @@ async def _heal_effort_and_rebuild_params(
         model,
         session.hf_token,
         reasoning_effort=session.effective_effort_for(model),
+        router=router_override_from_config(session.config),
     )
 
 
@@ -1426,6 +1427,7 @@ class Handlers:
                     reasoning_effort=session.effective_effort_for(
                         session.config.model_name
                     ),
+                    router=router_override_from_config(session.config),
                 )
                 if session.stream:
                     llm_result = await _call_llm_streaming(

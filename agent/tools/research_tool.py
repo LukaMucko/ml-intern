@@ -16,7 +16,7 @@ from litellm import Message, acompletion
 
 from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
-from agent.core.llm_params import _resolve_llm_params
+from agent.core.llm_params import _resolve_llm_params, router_override_from_config
 from agent.core.model_ids import strip_huggingface_model_prefix
 from agent.core.prompt_caching import (
     router_session_id_for,
@@ -308,6 +308,7 @@ async def research_handler(
         research_model,
         getattr(session, "hf_token", None),
         reasoning_effort=_capped,
+        router=router_override_from_config(getattr(session, "config", None)),
     )
     llm_params = with_prompt_cache_params(
         llm_params,

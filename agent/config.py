@@ -48,6 +48,20 @@ class Config(BaseModel):
     auto_file_upload: bool = False
     tool_runtime: Literal["local", "sandbox"] = "local"
 
+    # Custom OpenAI-compatible LLM router (e.g. a LiteLLM proxy gateway).
+    # When ``base_url`` is set, all model ids are sent to this endpoint as
+    # ``openai/<model>`` instead of the HF Router. ``api_key`` authenticates
+    # against the gateway, ``llm_proxy`` routes traffic through an HTTP(S)
+    # proxy, and ``provider_routing`` is forwarded via ``extra_body`` so a
+    # LiteLLM proxy can pin providers (e.g. ``{"only": ["fireworks"],
+    # "allow_fallbacks": false, "sort": "throughput"}``). All fields are
+    # optional and env-substitutable; when ``base_url`` is empty the agent
+    # falls back to the HF Router path.
+    base_url: str | None = None
+    api_key: str | None = None
+    llm_proxy: str | None = None
+    provider_routing: dict[str, Any] | None = None
+
     # Reasoning effort *preference* — the ceiling the user wants. The probe
     # on `/model` walks a cascade down from here (``max`` → ``xhigh`` → ``high``
     # → …) and caches per-model what the provider actually accepted in
